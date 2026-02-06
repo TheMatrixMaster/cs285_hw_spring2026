@@ -20,7 +20,7 @@ from hw1_imitation.data import (
     load_pusht_zarr,
 )
 from hw1_imitation.model import build_policy, PolicyType
-from hw1_imitation.evaluation import Logger
+from hw1_imitation.evaluation import Logger, evaluate_policy
 
 LOGDIR_PREFIX = "exp"
 
@@ -55,6 +55,7 @@ class TrainConfig:
     wandb_project: str = "hw1-imitation"
     # Experiment name suffix for logging and WandB.
     exp_name: str | None = None
+    debug: bool = False
 
 
 def parse_train_config(
@@ -122,12 +123,43 @@ def run_training(config: TrainConfig) -> None:
     if config.exp_name is not None:
         exp_name += f"_{config.exp_name}"
     log_dir = Path(LOGDIR_PREFIX) / exp_name
+
     wandb.init(
-        project=config.wandb_project, config=config_to_dict(config), name=exp_name
+        project=config.wandb_project,
+        config=config_to_dict(config),
+        name=exp_name,
+        mode="disabled" if config.debug else "online",
     )
     logger = Logger(log_dir)
 
     ### TODO: PUT YOUR MAIN TRAINING LOOP HERE ###
+    optimizer = torch.optim.Adam(model.parameters(), lr=config.lr, weight_decay=config.weight_decay)
+    model = torch.compile(model)
+
+    for epoch in range(config.num_epochs):
+        for i, batch in enumerate(loader):
+            step = epoch * len(loader) + i
+            state, action_chunk = batch # (bs, state_dim), (bs, chunk_size, action_dim)
+            loss = model.compute_loss(state, action_chunk)
+            optimizer.zero_grad()
+            loss.backward()
+            optimizer.step()
+            logger.log({"loss": loss.item(), "eval/mean_reward": None}, step)
+            if step % config.eval_interval == 0:
+                if config.debug:
+                    print(f"Epoch {epoch}, Step {step}, Loss: {loss.item():.4f}")
+                else:
+                    evaluate_policy(
+                        model,
+                        normalizer,
+                        device,
+                        config.chunk_size,
+                        config.video_size,
+                        config.num_video_episodes,
+                        config.flow_num_steps,
+                        step,
+                        logger,
+                    )
 
     logger.dump_for_grading()
 
