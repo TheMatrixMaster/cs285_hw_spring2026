@@ -62,6 +62,13 @@ def run_training_loop(logger, args):
         # TODO: sample `args.batch_size` transitions using utils.sample_trajectories
         # make sure to use `max_ep_len`
         trajs, envsteps_this_batch = None, None
+        trajs, envsteps_this_batch = utils.sample_trajectories(
+            env,
+            agent.actor,
+            min_timesteps_per_batch=args.batch_size,
+            max_length=max_ep_len,
+            render=False,
+        )
         total_envsteps += envsteps_this_batch
 
         # trajs should be a list of dictionaries of NumPy arrays, where each dictionary corresponds to a trajectory.
@@ -70,6 +77,12 @@ def run_training_loop(logger, args):
 
         # TODO: train the agent using the sampled trajectories and the agent's update function
         train_info: dict = None
+        train_info = agent.update(
+            obs=trajs_dict["observation"],
+            actions=trajs_dict["action"],
+            rewards=trajs_dict["reward"],
+            terminals=trajs_dict["terminal"],
+        )
 
         if itr % args.scalar_log_freq == 0:
             # save eval metrics
@@ -143,6 +156,7 @@ def setup_arguments(args=None):
     parser.add_argument("--which_gpu", "-gpu_id", default=0)
     parser.add_argument("--video_log_freq", type=int, default=-1)
     parser.add_argument("--scalar_log_freq", type=int, default=1)
+    parser.add_argument("--debug", action="store_true")
 
     args = parser.parse_args(args=args)
 
@@ -156,7 +170,8 @@ def main(args):
     exp_name = f"{args.env_name}_{args.exp_name}_sd{args.seed}_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
 
     config = vars(args)
-    setup_wandb(project='cs285_hw2', name=exp_name, config=config)
+    mode = "disabled" if args.debug else "online" 
+    setup_wandb(project='cs285_hw2', name=exp_name, config=config, mode=mode)
     args.save_dir = os.path.join(logdir_prefix, exp_name)
     os.makedirs(args.save_dir, exist_ok=True)
     logger = Logger(os.path.join(args.save_dir, 'log.csv'))
