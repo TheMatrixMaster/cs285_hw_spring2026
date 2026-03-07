@@ -90,7 +90,7 @@ class SoftActorCritic(nn.Module):
             # TODO(Section 3.5): Initialize log_alpha, alpha_optimizer, and target_entropy
             # Hint: Initialize log_alpha to log(temperature) so alpha starts at the given temperature
             self.log_alpha = torch.nn.Parameter(torch.tensor(temperature, dtype=torch.float32).log())
-            self.alpha_optimizer = torch.optim.Adam(self.log_alpha, lr=alpha_learning_rate)
+            self.alpha_optimizer = torch.optim.Adam([self.log_alpha], lr=alpha_learning_rate)
             self.target_entropy = -action_dim
             # ENDTODO
 
@@ -105,7 +105,7 @@ class SoftActorCritic(nn.Module):
         if self.auto_tune_temperature:
             # TODO(Section 3.5): Return the current learned temperature
             # skip here until we implement the temperature tuning
-            return self.log_alpha.exp()
+            return self.log_alpha.exp().item()
             # ENDTODO
         else:
             return self.temperature
@@ -290,7 +290,18 @@ class SoftActorCritic(nn.Module):
         """
         Update the actor by one gradient step using reparameterization.
         """
+        # Temporarily disable gradients for critic parameters
+        # We need gradients w.r.t. actions (reparam trick) but not critic weights
+        for critic in self.critics:
+            for param in critic.parameters():
+                param.requires_grad = False
+
         loss, entropy, log_prob = self.actor_loss_reparametrize(obs)
+
+        # Re-enable gradients for critic parameters
+        for critic in self.critics:
+            for param in critic.parameters():
+                param.requires_grad = True
 
         # TODO(Section 3.3): Add the entropy bonus to the actor loss: loss -= [your entropy bonus here]
         loss -= self.get_temperature() * entropy
