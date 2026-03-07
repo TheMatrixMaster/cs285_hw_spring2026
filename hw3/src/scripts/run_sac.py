@@ -62,7 +62,7 @@ def run_training_loop(config: dict, logger: Logger, args: argparse.Namespace):
             action = env.action_space.sample()
         else:
             # TODO(Section 3.1): Select an action
-            action = None
+            action = agent.get_action(observation=observation)
             # ENDTODO
 
         # Step the environment and add the data to the replay buffer
@@ -87,8 +87,16 @@ def run_training_loop(config: dict, logger: Logger, args: argparse.Namespace):
         # Train the agent
         if step >= config["training_starts"]:
             # TODO(Section 3.1): Sample a batch of config["batch_size"] transitions from the replay buffer
-            batch = None
-            update_info = None
+            batch = replay_buffer.sample(config["batch_size"])
+            batch = ptu.from_numpy(batch)
+            update_info = agent.update(
+                observations=batch["observations"],
+                actions=batch["actions"],
+                rewards=batch["rewards"],
+                next_observations=batch["next_observations"],
+                dones=batch["dones"],
+                step=step,
+            )
             # ENDTODO
 
             # Logging
@@ -166,7 +174,7 @@ def make_logger(config: dict, args: argparse.Namespace) -> Logger:
         project=args.wandb_project,
         group=config["log_name"],
         name=logdir.split("/")[-1],
-        mode="online",
+        mode="disabled" if args.wandb_disable else "online",
         config=wandb_config,
     )
 
@@ -187,6 +195,7 @@ def main():
     parser.add_argument("--log_interval", type=int, default=1000)
 
     # WandB arguments
+    parser.add_argument("--wandb_disable", action="store_true")
     parser.add_argument("--wandb_entity", type=str, default=None)
     parser.add_argument("--wandb_project", type=str, default="hw3")
 
