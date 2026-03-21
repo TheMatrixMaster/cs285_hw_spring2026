@@ -87,8 +87,14 @@ class Reinforce(RLAlgorithm):
             # 4. kl = approx_kl_from_logprobs(new_logp, mb.ref_logprobs, mask)
             # 5. entropy = -masked_mean(new_logp, mask) for LOGGING ONLY
             #    (do not add an entropy term to the loss)
-            raise NotImplementedError("student TODO: Reinforce.update minibatch computations")
+            # raise NotImplementedError("student TODO: Reinforce.update minibatch computations")
 
+            new_logp = compute_per_token_logprobs(model, mb.input_ids, mb.attention_mask)       # [B_mb, L-1]
+            seq_logp_i = masked_mean_per_row(new_logp, mask=mask)                               # [B_mb,]
+            pg_loss = -(adv * seq_logp_i).mean()                                                # [1,]
+            kl = approx_kl_from_logprobs(new_logp, mb.ref_logprobs, mask=mask)                  # [1,]
+            entropy = -masked_mean(new_logp, mask=mask)                                         # [1,]
+            
             loss = (pg_loss + cfg.kl_coef * kl) / max(1, grad_accum_steps)
             if not torch.isfinite(loss):
                 skipped_nonfinite += 1

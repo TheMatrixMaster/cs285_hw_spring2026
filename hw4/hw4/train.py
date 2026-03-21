@@ -202,7 +202,23 @@ def compute_group_advantages(rewards: torch.Tensor, group_size: int, eps: float 
     #   of your choice for that group
     #
     # Return a flat tensor with the same shape/order as rewards.
-    raise NotImplementedError("student TODO: compute_group_advantages")
+    # raise NotImplementedError("student TODO: compute_group_advantages")
+
+    if rewards.numel() % group_size != 0:
+        raise ValueError(f"Flattened rewards size ({rewards.numel()}) must be divisible by group size ({group_size}).")
+
+    if group_size < 1:
+        raise ValueError(f"Group size ({group_size}) cannot be less than one.")
+
+    if group_size == 1:
+        print("Using a group size of 1 means that the advantage will always return 0.")
+        return torch.zeros_like(rewards, dtype=rewards.dtype, device=rewards.device)
+
+    rewards = rewards.reshape(-1, group_size)
+    group_reward_mean = rewards.mean(-1, keepdim=True)
+    group_reward_std = rewards.std(-1, unbiased=False, keepdim=True) if group_size > 1 else (1 - eps)
+    group_advantages = (rewards - group_reward_mean) / (group_reward_std + eps)
+    return group_advantages.view(-1)
 
 
 def maybe_normalize_advantages(advantages: torch.Tensor, enabled: bool, eps: float = 1e-6) -> torch.Tensor:
@@ -211,7 +227,14 @@ def maybe_normalize_advantages(advantages: torch.Tensor, enabled: bool, eps: flo
     # Again use the population standard deviation (unbiased=False).
     # Otherwise return A unchanged.
     # Keep the output shape identical to the input shape.
-    raise NotImplementedError("student TODO: maybe_normalize_advantages")
+    # raise NotImplementedError("student TODO: maybe_normalize_advantages")
+
+    if enabled:
+        advantages_mean = advantages.mean()
+        advantages_std = advantages.std(unbiased=False)
+        advantages = (advantages - advantages_mean) / (advantages_std + eps)
+
+    return advantages
 
 
 def maybe_update_warmup_lr(optimizer: torch.optim.Optimizer, base_lr: float, step: int, warmup_steps: int) -> None:

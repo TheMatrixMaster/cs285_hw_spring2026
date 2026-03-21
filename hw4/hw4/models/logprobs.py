@@ -43,7 +43,21 @@ def compute_per_token_logprobs(
     #
     # Respect enable_grad: when enable_grad=False this function should not build an
     # autograd graph.
-    raise NotImplementedError("student TODO: compute_per_token_logprobs")
+    # raise NotImplementedError("student TODO: compute_per_token_logprobs")
+
+    with torch.set_grad_enabled(mode=enable_grad):
+        out = model(input_ids=input_ids, attention_mask=attention_mask, use_cache=False)
+
+    logits: torch.Tensor = out.logits   # (B, L, V)
+    B, L, V = logits.shape
+
+    per_token_nll = F.cross_entropy(
+        input=logits[:, :-1, :].reshape(-1, V),
+        target=input_ids[:, 1:].reshape(-1, ),
+        reduction="none",
+    )
+    per_token_ll = -per_token_nll.reshape(B, L-1)
+    return per_token_ll
 
 
 def build_completion_mask(
@@ -66,7 +80,14 @@ def build_completion_mask(
     # prompt_input_len is the (padded) prompt length before completion tokens were
     # appended. You can use attention_mask to exclude padding; pad_token_id is passed
     # for convenience but a direct attention-mask-based solution is fine.
-    raise NotImplementedError("student TODO: build_completion_mask")
+    # raise NotImplementedError("student TODO: build_completion_mask")
+
+    B, L = input_ids.shape
+
+    completion_mask = torch.zeros(B, L-1, device=input_ids.device, dtype=torch.float32)
+    completion_mask[:, prompt_input_len-1:] = 1.0
+    completion_mask *= attention_mask[:, 1:].to(torch.float32)
+    return completion_mask
 
 
 def masked_sum(x: torch.Tensor, mask: torch.Tensor, eps: float = 1e-8) -> torch.Tensor:
@@ -110,4 +131,13 @@ def approx_kl_from_logprobs(
     #                             = KL(p_new || p_ref).
     #
     # The clamp to [-20, 20] is for numerical stability / variance control.
-    raise NotImplementedError("student TODO: approx_kl_from_logprobs")
+    # raise NotImplementedError("student TODO: approx_kl_from_logprobs")
+
+    delta = torch.clamp(ref_logprobs - new_logprobs, min=-log_ratio_clip, max=log_ratio_clip)
+    per_token_hat_k = torch.exp(delta) - delta - 1
+    masked_hat_k = per_token_hat_k * mask
+
+    assert not torch.isinf(masked_hat_k).any().item()
+    assert not torch.isnan(masked_hat_k).any().item()
+
+    return masked_hat_k.sum() / (mask.sum() + eps)

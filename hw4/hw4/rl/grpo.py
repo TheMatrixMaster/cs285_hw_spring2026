@@ -96,7 +96,26 @@ class GRPO(RLAlgorithm):
                 #    (do not add an entropy term to the loss)
                 # 10. clipfrac = masked fraction of completion-token positions where
                 #     the PPO ratio was clipped outside [1-clip_eps, 1+clip_eps]
-                raise NotImplementedError("student TODO: GRPO.update minibatch computations")
+                # raise NotImplementedError("student TODO: GRPO.update minibatch computations")
+                
+                new_logp = compute_per_token_logprobs(model, mb.input_ids, mb.attention_mask)   # [B_mb, L-1]
+                log_ratio = torch.clamp(new_logp - mb.old_logprobs, min=-20, max=20)            # [B_mb, L-1]
+                ratio = log_ratio.exp()                                                         # [B_mb, L-1]
+                adv_per_token = adv.unsqueeze(-1)                                               # [B_mb, 1]
+                
+                clip_eps = cfg.clip_eps
+                unclipped = ratio * adv_per_token                                               # [B_mb, L-1]
+                clipped = torch.clip(ratio, min=1-clip_eps, max=1+clip_eps) * adv_per_token     # [B_mb, L-1]
+                per_token_obj = torch.min(unclipped, clipped) * mask                            # [B_mb, L-1]
+                
+                seq_obj = masked_mean_per_row(per_token_obj, mask=mask)                         # [B_mb]
+                pg_loss = -seq_obj.mean()                                                       # [1,]
+                
+                kl = approx_kl_from_logprobs(new_logp, mb.ref_logprobs, mask=mask)              # [1,]
+                entropy = -masked_mean(new_logp, mask=mask)                                     # [1,]
+
+                is_clipped = (unclipped != clipped).float()                                     # [B_mb, L-1]
+                clipfrac = (is_clipped * mask).sum() / (mask.sum() + 1e-8)                      # [1,]
 
                 loss = (pg_loss + cfg.kl_coef * kl) / max(1, grad_accum_steps)
                 if not torch.isfinite(loss):
