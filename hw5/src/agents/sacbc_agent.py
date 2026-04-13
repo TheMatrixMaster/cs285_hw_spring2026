@@ -1,6 +1,8 @@
 from typing import Optional
 import torch
 from torch import nn
+from torch.nn import functional as F
+from torch import distributions
 import numpy as np
 import infrastructure.pytorch_util as ptu
 
@@ -12,14 +14,12 @@ class SACBCAgent(nn.Module):
         self,
         observation_shape: Sequence[int],
         action_dim: int,
-
         make_actor,
         make_actor_optimizer,
         make_critic,
         make_critic_optimizer,
         make_beta,
         make_beta_optimizer,
-
         discount: float,
         target_update_rate: float,
         alpha: float,
@@ -40,7 +40,9 @@ class SACBCAgent(nn.Module):
         self.target_update_rate = target_update_rate
         self.alpha = alpha
 
-        self.target_entropy = -action_dim / 2  # Heuristic value (|A| / 2) from the SAC paper.
+        self.target_entropy = (
+            -action_dim / 2
+        )  # Heuristic value (|A| / 2) from the SAC paper.
 
     def get_action(self, observation: np.ndarray):
         """
@@ -64,18 +66,38 @@ class SACBCAgent(nn.Module):
         Update Q(s, a)
         """
         # TODO(student): Compute the Q loss
-        q = ...
-        loss = ...
+        batch_size = observations.shape[0]
+        num_critic_networks = len(self.critic.net.mlps)
 
+        with torch.no_grad():
+            next_action_distribution: distributions.Distribution = self.actor(
+                next_observations
+            )
+            next_actions = next_action_distribution.sample()
+            next_qs = self.target_critic(next_observations, next_actions)
+            next_qs = next_qs.mean(dim=0)
+
+            if next_qs.shape == (batch_size,):
+                next_qs = (
+                    next_qs[None].expand((num_critic_networks, batch_size)).contiguous()
+                )
+
+            assert next_qs.shape == (num_critic_networks, batch_size), next_qs.shape
+            target_values = rewards + (1.0 - dones) * self.discount * next_qs
+
+        q_values = self.critic(observations, actions)
+        assert q_values.shape == (num_critic_networks, batch_size), q_values.shape
+
+        loss = F.mse_loss(q_values, target_values)
         self.critic_optimizer.zero_grad()
         loss.backward()
         self.critic_optimizer.step()
 
         return {
             "q_loss": loss,
-            "q_mean": q.mean(),
-            "q_max": q.max(),
-            "q_min": q.min(),
+            "q_mean": q_values.mean(),
+            "q_max": q_values.max(),
+            "q_min": q_values.min(),
         }
 
     @torch.compile
@@ -88,12 +110,32 @@ class SACBCAgent(nn.Module):
         Update the actor
         """
         # TODO(student): Compute the actor loss
-        q_loss = ...
+        num_critic_networks = len(self.critic.net.mlps)
+        batch_size = observations.shape[0]
+        action_dim = actions.shape[1]
 
-        mses = ...
-        bc_loss = ...
+        pi_action_distribution: distributions.Distribution = self.actor(observations)
+        pi_actions = pi_action_distribution.rsample()
+        assert pi_actions.shape == (batch_size, action_dim), pi_actions.shape
 
-        entropy_loss = ...
+        for critic in self.critic.net.mlps:
+            for param in critic.parameters():
+                param.requires_grad = False
+
+        q_values = self.critic(observations, pi_actions)
+        assert q_values.shape == (num_critic_networks, batch_size), q_values.shape
+
+        for critic in self.critic.net.mlps:
+            for param in critic.parameters():
+                param.requires_grad = True
+
+        log_prob = pi_action_distribution.log_prob(pi_actions)
+        q_loss = -q_values.mean()
+
+        mses = F.mse_loss(actions, pi_actions, reduction="mean")
+        bc_loss = self.alpha * mses
+
+        entropy_loss = self.beta().detach() * log_prob.mean()
 
         loss = q_loss + bc_loss + entropy_loss
 
@@ -141,7 +183,9 @@ class SACBCAgent(nn.Module):
         dones: torch.Tensor,
         step: int,
     ):
-        metrics_q = self.update_q(observations, actions, rewards, next_observations, dones)
+        metrics_q = self.update_q(
+            observations, actions, rewards, next_observations, dones
+        )
         metrics_actor = self.update_actor(observations, actions)
         metrics_beta = self.update_beta(observations)
         metrics = {
@@ -151,9 +195,17 @@ class SACBCAgent(nn.Module):
         }
 
         self.update_target_critic()
-
         return metrics
 
     def update_target_critic(self) -> None:
         # TODO(student): Update target_critic using Polyak averaging with self.target_update_rate
-        ...
+        tau = self.target_update_rate
+        critic_nets = self.critic.net.mlps
+        target_critic_nets = self.target_critic.net.mlps
+        for target_critic, critic in zip(target_critic_nets, critic_nets):
+            for target_param, param in zip(
+                target_critic.parameters(), critic.parameters()
+            ):
+                target_param.data.copy_(
+                    target_param.data * (1.0 - tau) + param.data * tau
+                )

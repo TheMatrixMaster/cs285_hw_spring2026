@@ -16,7 +16,7 @@ Here are some example commands. Run them in the `hw5` directory.
 
 * To run on Modal:
   ```bash
-  uv run modal run src/scripts/modal_run.py --run_group=q1 --base_config=sacbc --env_name=cube-single-play-singletask-task1-v0 --seed=0
+  uv run modal run --detach src/scripts/modal_run.py --run_group=q1 --base_config=sacbc --env_name=cube-single-play-singletask-task1-v0 --seed=0
   ```
   * You may request a different GPU type, CPU count, and memory size by changing variables in `src/scripts/modal_run.py`
   * Use `modal run --detach` to keep your job running in the background.
@@ -24,7 +24,7 @@ Here are some example commands. Run them in the `hw5` directory.
 
 * To run 4 jobs on a single GPU in parallel on Modal:
   ```bash
-  uv run modal run src/scripts/modal_run.py --njobs=4 \
+  uv run modal run --detach src/scripts/modal_run.py --njobs=4 \
   "JOB --run_group=q1 --base_config=sacbc --env_name=cube-single-play-singletask-task1-v0 --seed=0 --alpha=30" \
   "JOB --run_group=q1 --base_config=sacbc --env_name=cube-single-play-singletask-task1-v0 --seed=1 --alpha=100" \
   "JOB --run_group=q1 --base_config=sacbc --env_name=cube-single-play-singletask-task1-v0 --seed=2 --alpha=300" \

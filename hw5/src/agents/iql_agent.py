@@ -1,6 +1,8 @@
 from typing import Optional
 import torch
 from torch import nn
+from torch import distributions
+from torch.nn import functional as F
 import numpy as np
 import infrastructure.pytorch_util as ptu
 
@@ -59,7 +61,7 @@ class IQLAgent(nn.Module):
         Compute the expectile loss for IQL
         """
         # TODO(student): Implement the expectile loss
-        return ...
+        return torch.abs(expectile - (adv > 0).float()) * adv**2
 
     @torch.compile
     def update_v(
@@ -71,8 +73,9 @@ class IQLAgent(nn.Module):
         Update V(s) with expectile regression
         """
         # TODO(student): Compute the value loss
-        v = ...
-        loss = ...
+        v = self.value(observations)
+        q = torch.min(self.target_critic(observations, actions), dim=0).values.detach()
+        loss = self.iql_expectile_loss(v - q, self.expectile).mean()
 
         self.value_optimizer.zero_grad()
         loss.backward()
@@ -98,8 +101,22 @@ class IQLAgent(nn.Module):
         Update Q(s, a)
         """
         # TODO(student): Compute the Q loss
-        q = ...
-        loss = ...
+        batch_size = observations.shape[0]
+        num_critic_networks = len(self.critic.net.mlps)
+
+        with torch.no_grad():
+            next_v = self.value(next_observations)
+
+            if next_v.shape == (batch_size,):
+                next_v = next_v[None].expand((num_critic_networks, batch_size)).contiguous()
+
+            assert next_v.shape == (num_critic_networks, batch_size), next_v.shape
+            target_values = rewards + (1.0 - dones) * self.discount * next_v
+
+        q_values = self.critic(observations, actions)
+        assert q_values.shape == (num_critic_networks, batch_size), q_values.shape
+
+        loss = F.mse_loss(q_values, target_values)
 
         self.critic_optimizer.zero_grad()
         loss.backward()
@@ -107,9 +124,9 @@ class IQLAgent(nn.Module):
 
         return {
             "q_loss": loss,
-            "q_mean": q.mean(),
-            "q_max": q.max(),
-            "q_min": q.min(),
+            "q_mean": q_values.mean(),
+            "q_max": q_values.max(),
+            "q_min": q_values.min(),
         }
 
     @torch.compile
@@ -122,8 +139,23 @@ class IQLAgent(nn.Module):
         Update the actor using advantage-weighted regression
         """
         # TODO(student): Compute the actor loss
-        dist = ...
-        loss = ...
+        num_critic_networks = len(self.critic.net.mlps)
+        batch_size = observations.shape[0]
+        
+        with torch.no_grad():
+            q_values: torch.Tensor = self.critic(observations, actions)
+            assert q_values.shape == (num_critic_networks, batch_size), q_values.shape
+
+            v: torch.Tensor = self.value(observations)
+            assert v.shape == (batch_size,), v.shape
+
+            adv = q_values.min(dim=0).values - v
+            weights = -torch.clamp(torch.exp(self.alpha * adv), max=100)
+
+        dist: distributions.Distribution = self.actor(observations)
+        log_prob = dist.log_prob(actions)
+
+        loss = (weights * log_prob).mean()
 
         self.actor_optimizer.zero_grad()
         loss.backward()
@@ -158,4 +190,13 @@ class IQLAgent(nn.Module):
 
     def update_target_critic(self) -> None:
         # TODO(student): Update target_critic using Polyak averaging with self.target_update_rate
-        ...
+        tau = self.target_update_rate
+        critic_nets = self.critic.net.mlps
+        target_critic_nets = self.target_critic.net.mlps
+        for target_critic, critic in zip(target_critic_nets, critic_nets):
+            for target_param, param in zip(
+                target_critic.parameters(), critic.parameters()
+            ):
+                target_param.data.copy_(
+                    target_param.data * (1.0 - tau) + param.data * tau
+                )
